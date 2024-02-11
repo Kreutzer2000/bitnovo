@@ -66,9 +66,12 @@ export default function CreatePayment() {
                     currency: selectedCurrency.value,
                     concept: (document.getElementById('concept') as HTMLInputElement).value,
                     rate: orderData.rate, // Guarda la tasa de cambio
+                    paymentUrl: orderData.payment_uri,
                     cryptoAmount: orderData.expected_input_amount,
                     identifier: orderData.identifier,
                 }));
+
+                console.log('Payment data saved:', localStorage.getItem('paymentData'));
                 
                 // Redirigir al usuario
                 router.push(`/payment/${orderData.identifier}`);

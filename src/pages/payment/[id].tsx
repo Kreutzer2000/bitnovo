@@ -2,11 +2,13 @@
 import Head from 'next/head';
 import Image from 'next/image';
 import { useRouter } from 'next/router';
+import { QRCodeSVG } from 'qrcode.react';
 import { useEffect, useRef, useState } from 'react';
 import { FaBitcoin } from 'react-icons/fa';
 import { FiClock, FiCopy } from "react-icons/fi";
 import { PiWarningOctagonFill } from "react-icons/pi";
 import Swal from 'sweetalert2';
+import Web3 from 'web3';
 import config from '../../config';
 
 interface PaymentDetails {
@@ -28,20 +30,62 @@ export default function PaymentPage() {
     const { id } = router.query; // ID sigue siendo parte del path, no un parámetro de consulta
     const [activeButton, setActiveButton] = useState('smartQR');
     const [paymentDetails, setPaymentDetails] = useState<PaymentDetails | null>(null);
-    const [timer, setTimer] = useState(300);
+    const [timer, setTimer] = useState(900);
 
     // Referencia para el WebSocket para poder cerrarlo en el efecto de limpieza
     const webSocketRef = useRef<WebSocket | null>(null);
 
-    // Efecto para manejar la cuenta regresiva del temporizador
+    // Agrega un estado para Web3 y la cuenta
+    const [web3, setWeb3] = useState<Web3 | null>(null);
+    const [account, setAccount] = useState(null);
+
+    // Este useEffect se encarga de manejar el temporizador y la lógica de reinicio
     useEffect(() => {
-        const interval = setInterval(() => {
-            setTimer((prevTimer) => prevTimer > 0 ? prevTimer - 1 : 0);
+        // Función para iniciar o reiniciar el temporizador
+        const startTimer = (durationSeconds = 900) => {
+            const endTime = new Date().getTime() + durationSeconds * 1000;
+            localStorage.setItem(`timerEnd-${id}`, endTime.toString()); // Guarda usando el ID del pago
+            setTimer(durationSeconds);
+        };
+
+        const calculateTimeLeft = () => {
+            // Obtiene el tiempo de finalización del temporizador desde localStorage
+            const endTime = localStorage.getItem(`timerEnd-${id}`);
+            if (!endTime) {
+                return 900; // Retorna el valor predeterminado si no hay tiempo almacenado
+            }
+            const now = new Date().getTime();
+            const timeLeft = Math.max((parseInt(endTime) - now) / 1000, 0);
+            return timeLeft;
+        };
+
+        // Calcula el tiempo restante al cargar la página
+        const timeLeft = calculateTimeLeft();
+
+        // Establece el temporizador con el tiempo restante
+        setTimer(timeLeft);
+
+        // Actualiza el temporizador cada segundo
+        const intervalId = setInterval(() => {
+            setTimer(prevTimer => {
+                const newTimer = prevTimer - 1;
+                if (newTimer <= 0) {
+                    clearInterval(intervalId);
+                    // Acciones a realizar cuando el temporizador llega a 0
+                    // Por ejemplo, mostrar una alerta o cambiar el estado de la página
+                }
+                return Math.max(newTimer, 0);
+            });
         }, 1000);
 
-        // Limpiar el intervalo cuando el componente se desmonte
-        return () => clearInterval(interval);
-    }, []);
+        return () => clearInterval(intervalId);
+    }, [id]); // Dependencia del useEffect al ID del pago
+
+    // Este useEffect se encarga de guardar la hora de finalización en localStorage cuando el temporizador cambia
+    useEffect(() => {
+        const endTime = new Date().getTime() + timer * 1000;
+        localStorage.setItem('timerEnd', endTime.toString());
+    }, [timer]);
 
     useEffect(() => {
         const fetchPaymentDetails = async () => {
@@ -68,11 +112,15 @@ export default function PaymentPage() {
                     const [data] = await response.json();
                     console.log('Detalles del pedido:', data);
 
+                    console.log('Local payment data:', localPaymentData);
                     // Antes de calcular, verifica que 'rate' y 'data.fiat_amount' existen y no son null.
                     const rate = localPaymentData.rate ?? 1; // Proporciona un valor predeterminado si es null.
                     const fiatAmount = parseFloat(data.fiat_amount ?? '0'); // Proporciona un valor predeterminado si es null.
                     console.log('rate:', rate);
                     console.log('fiatAmount:', fiatAmount);
+
+                    const paymentUrl = localPaymentData.paymentUrl ?? '';
+                    console.log('paymentUrl:', paymentUrl);
 
                     // Calcula la cantidad de criptomoneda a enviar.
                     const cryptoAmountToSend = (fiatAmount / rate).toFixed(2); 
@@ -101,9 +149,9 @@ export default function PaymentPage() {
                         amount: localPaymentData.amount || data.crypto_amount.toString(), // Usar amount de localStorage o crypto_amount de la API
                         tagMemo: data.tag_memo || 'No proporcionado',
                         blockchainAddress: data.address || 'No proporcionado',
-                        qrCodeUrl: data.payment_uri,
+                        qrCodeUrl: paymentUrl,
                         // cryptoAmountToSend: cryptoAmountToSend,
-                        cryptoAmountToSend: data.crypto_amount.toFixed(2),
+                        cryptoAmountToSend: data.crypto_amount,
                         fiat: data.fiat,
                         created_at: formatDate(createdAt),
                     };
@@ -212,7 +260,25 @@ export default function PaymentPage() {
         }
     }, [id, router]);
 
-    
+    const connectToMetaMask = async () => {
+        if (window.ethereum) {
+            const web3 = new Web3(window.ethereum);
+            try {
+                const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+                setAccount(accounts[0]);
+                setWeb3(web3);
+                console.log('Conectado a MetaMask');
+                // No cambiar el botón activo aquí; dejar que el usuario continúe su acción deseada
+                
+            } catch (error) {
+                console.error('Error al conectar con MetaMask:', error);
+                Swal.fire('Error', 'No se pudo conectar con MetaMask. Asegúrate de haber concedido los permisos necesarios.', 'error');
+            }
+        } else {
+            Swal.fire('MetaMask no encontrado', 'Instala MetaMask para continuar con la opción de pago Web3.', 'warning');
+            // No redirigir automáticamente, dejar que el usuario decida
+        }
+    };
 
     // Función para copiar al portapapeles
     const handleCopyToClipboard = (text: string) => {
@@ -223,12 +289,34 @@ export default function PaymentPage() {
     };
 
     // Función para cambiar el estado activo
-    const handleActiveButton = (buttonName: 'smartQR' | 'web3') => {
-        setActiveButton(buttonName);
+    const handleActiveButton = async (buttonName: 'smartQR' | 'web3') => {
+        if (buttonName === 'web3') {
+            if (window.ethereum) {
+                try {
+                    // Intenta conectar a MetaMask aquí
+                    await connectToMetaMask(); // Asume que esta función gestiona la conexión
+                    setActiveButton(buttonName);
+                } catch (error) {
+                    // Maneja el error (usuario rechaza la conexión, etc.)
+                    console.error('Error al conectar con MetaMask:', error);
+                    Swal.fire('Error', 'No se pudo conectar con MetaMask.', 'error');
+                }
+            } else {
+                // MetaMask no está instalado, muestra un mensaje y no cambies el botón activo.
+                Swal.fire('MetaMask no encontrado', 'Instala MetaMask para usar esta opción.', 'warning');
+            }
+        } else {
+            // Cambia al método de pago QR sin condiciones
+            setActiveButton(buttonName);
+        }
     };
 
     if (!paymentDetails) {
-      return <div>Cargando...</div>; // O algún otro componente de carga
+        return (
+            <div className="flex justify-center items-center min-h-screen">
+                <div className="spinner" />
+            </div>
+        );
     }
 
     return (
@@ -295,7 +383,16 @@ export default function PaymentPage() {
                                         </div>
                                         <div className="my-4 flex justify-center">
                                             {activeButton === 'smartQR' ? (
-                                                <Image src={paymentDetails.qrCodeUrl ?? ''} alt="Código QR de Pago" width={256} height={256} />
+                                                // <Image src={paymentDetails.qrCodeUrl ?? ''} alt="Código QR de Pago" width={256} height={256} />
+                                                <div className="px-6 py-4 bg-white rounded-md shadow-lg inline-block">
+                                                  {/* ... otros componentes de tu página ... */}
+                                                    {paymentDetails.qrCodeUrl && (
+                                                        <div className="text-center my-4">
+                                                            <QRCodeSVG value={paymentDetails.qrCodeUrl} size={200} />
+                                                        </div>
+                                                    )}
+                                                  {/* ... más de tu JSX ... */}
+                                                </div>
                                             ) : (
                                                 <Image src="/images/metamask.jpg" alt="Metamask" width={250} height={250} />
                                             )}
