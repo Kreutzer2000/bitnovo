@@ -2,7 +2,6 @@
 import Head from 'next/head';
 import Image from 'next/image';
 import { useRouter } from 'next/router';
-import { QRCodeSVG } from 'qrcode.react';
 import { useEffect, useRef, useState } from 'react';
 import { FaBitcoin } from 'react-icons/fa';
 import { FiClock, FiCopy } from "react-icons/fi";
@@ -11,31 +10,22 @@ import Swal from 'sweetalert2';
 import Web3 from 'web3';
 import config from '../../config';
 
-interface PaymentDetails {
-    fiat_amount?: string;
-    cryptoAmountToSend?: string;
-    amount?: string;
-    currency?: string;
-    concept?: string;
-    date?: string;
-    qrCodeUrl?: string;
-    blockchainAddress?: string;
-    tagMemo?: string;
-    fiat?: string;
-    created_at?: string;
-}
+import PaymentOptions from '../../components/PaymentOptions';
+import PaymentSummaryCard from '../../components/PaymentSummaryCard';
+import QRCodeDisplay from '../../components/QRCodeDisplay';
+import TimerDisplay from '../../components/TimerDisplay';
+
+import { PaymentDetails } from '../../types/paymentDetails';
 
 export default function PaymentPage() {
     const router = useRouter();
-    const { id } = router.query; // ID sigue siendo parte del path, no un parámetro de consulta
-    const [activeButton, setActiveButton] = useState('smartQR');
+    const { id } = router.query;
+    const [activeButton, setActiveButton] = useState<'smartQR' | 'web3'>('smartQR');
     const [paymentDetails, setPaymentDetails] = useState<PaymentDetails | null>(null);
     const [timer, setTimer] = useState(900);
 
-    // Referencia para el WebSocket para poder cerrarlo en el efecto de limpieza
     const webSocketRef = useRef<WebSocket | null>(null);
 
-    // Agrega un estado para Web3 y la cuenta
     const [web3, setWeb3] = useState<Web3 | null>(null);
     const [account, setAccount] = useState(null);
 
@@ -52,7 +42,7 @@ export default function PaymentPage() {
             // Obtiene el tiempo de finalización del temporizador desde localStorage
             const endTime = localStorage.getItem(`timerEnd-${id}`);
             if (!endTime) {
-                return 900; // Retorna el valor predeterminado si no hay tiempo almacenado
+                return 900;
             }
             const now = new Date().getTime();
             const timeLeft = Math.max((parseInt(endTime) - now) / 1000, 0);
@@ -71,8 +61,6 @@ export default function PaymentPage() {
                 const newTimer = prevTimer - 1;
                 if (newTimer <= 0) {
                     clearInterval(intervalId);
-                    // Acciones a realizar cuando el temporizador llega a 0
-                    // Por ejemplo, mostrar una alerta o cambiar el estado de la página
                 }
                 return Math.max(newTimer, 0);
             });
@@ -103,29 +91,20 @@ export default function PaymentPage() {
                         }
                     });
 
-                    console.log('response:', response);
-
                     if (!response.ok) {
                         throw new Error(`HTTP error! status: ${response.status}`);
                     }
 
                     const [data] = await response.json();
-                    console.log('Detalles del pedido:', data);
-
-                    console.log('Local payment data:', localPaymentData);
-                    // Antes de calcular, verifica que 'rate' y 'data.fiat_amount' existen y no son null.
-                    const rate = localPaymentData.rate ?? 1; // Proporciona un valor predeterminado si es null.
-                    const fiatAmount = parseFloat(data.fiat_amount ?? '0'); // Proporciona un valor predeterminado si es null.
-                    console.log('rate:', rate);
-                    console.log('fiatAmount:', fiatAmount);
+                    
+                    const rate = localPaymentData.rate ?? 1;
+                    const fiatAmount = parseFloat(data.fiat_amount ?? '0');
 
                     const paymentUrl = localPaymentData.paymentUrl ?? '';
-                    console.log('paymentUrl:', paymentUrl);
-
+                    
                     // Calcula la cantidad de criptomoneda a enviar.
                     const cryptoAmountToSend = (fiatAmount / rate).toFixed(2); 
-                    console.log('cryptoAmountToSend:', cryptoAmountToSend);
-
+                    
                     // Parsear la fecha de creación
                     const createdAt = new Date(data.created_at);
 
@@ -142,21 +121,19 @@ export default function PaymentPage() {
                         
                     // Combina los datos de la API con los datos locales
                     const combinedPaymentDetails = {
-                        ...localPaymentData, // Datos de localStorage
-                        ...data, // Sobrescribe con datos de la API
+                        ...localPaymentData,
+                        ...data,
                         fiat_amount: data.fiat_amount ? data.fiat_amount.toString() : '0',
                         currency: data.currency_id, // Usar currency_id de la API
                         amount: localPaymentData.amount || data.crypto_amount.toString(), // Usar amount de localStorage o crypto_amount de la API
                         tagMemo: data.tag_memo || 'No proporcionado',
                         blockchainAddress: data.address || 'No proporcionado',
                         qrCodeUrl: paymentUrl,
-                        // cryptoAmountToSend: cryptoAmountToSend,
                         cryptoAmountToSend: data.crypto_amount,
                         fiat: data.fiat,
                         created_at: formatDate(createdAt),
                     };
                 
-                    console.log('Combined payment details:', combinedPaymentDetails);
                     setPaymentDetails(combinedPaymentDetails);
                 } catch (error) {
                     console.error("Error fetching payment details:", error);
@@ -226,7 +203,6 @@ export default function PaymentPage() {
         if (id) {
             try {
                 const socketUrl = `wss://payments.pre-bnvo.com/ws/${id}`;
-                console.log(`Conectando a WebSocket en URL: ${socketUrl}`);
                 const socket = new WebSocket(socketUrl);
                 webSocketRef.current = socket;
 
@@ -247,7 +223,6 @@ export default function PaymentPage() {
                 socket.onerror = (error) => console.error("WebSocket Error:", error);
                 socket.onclose = () => console.log("WebSocket Disconnected");
 
-                console.log('webSocketRef:', webSocketRef);
                 // Función de limpieza al desmontar el componente
                 return () => {
                     socket.close();
@@ -268,7 +243,6 @@ export default function PaymentPage() {
                 setAccount(accounts[0]);
                 setWeb3(web3);
                 console.log('Conectado a MetaMask');
-                // No cambiar el botón activo aquí; dejar que el usuario continúe su acción deseada
                 
             } catch (error) {
                 console.error('Error al conectar con MetaMask:', error);
@@ -276,7 +250,6 @@ export default function PaymentPage() {
             }
         } else {
             Swal.fire('MetaMask no encontrado', 'Instala MetaMask para continuar con la opción de pago Web3.', 'warning');
-            // No redirigir automáticamente, dejar que el usuario decida
         }
     };
 
@@ -293,16 +266,13 @@ export default function PaymentPage() {
         if (buttonName === 'web3') {
             if (window.ethereum) {
                 try {
-                    // Intenta conectar a MetaMask aquí
-                    await connectToMetaMask(); // Asume que esta función gestiona la conexión
+                    await connectToMetaMask();
                     setActiveButton(buttonName);
                 } catch (error) {
-                    // Maneja el error (usuario rechaza la conexión, etc.)
                     console.error('Error al conectar con MetaMask:', error);
                     Swal.fire('Error', 'No se pudo conectar con MetaMask.', 'error');
                 }
             } else {
-                // MetaMask no está instalado, muestra un mensaje y no cambies el botón activo.
                 Swal.fire('MetaMask no encontrado', 'Instala MetaMask para usar esta opción.', 'warning');
             }
         } else {
@@ -330,37 +300,11 @@ export default function PaymentPage() {
                 {/* Contenido principal */}
                 <div className="container mx-auto py-4">
                     <div className="flex flex-col md:flex-row justify-center items-start gap-16">
-                        {/* ... (tus tarjetas de contenido aquí) ... */}
 
                         <div className="container mx-auto">
                             <div className="flex flex-col md:flex-row justify-center items-start px-32 gap-16">
-
-                                {/* Card de resumen del pedido */}
-                                <div className="w-full md:w-1/2">
-                                    <h2 className="text-xl font-bold mb-4">Resumen del pedido</h2>
-                                    <div className="bg-gray-100 p-6 rounded-lg shadow-lg">
-                                        <div className="mb-3 flex justify-between border-b-2 border-gray-300 pb-2">
-                                            <span><strong>Importe:</strong></span> 
-                                            <span>{paymentDetails.amount} {paymentDetails.fiat}</span>
-                                        </div>
-                                        <div className="mb-3 flex justify-between border-b-2 border-gray-300 pb-2">
-                                            <span><strong>Moneda seleccionada:</strong></span> 
-                                            <span>{paymentDetails.currency}</span>
-                                        </div>
-                                        <div className="mb-3 flex justify-between">
-                                            <span><strong>Comercio:</strong></span> 
-                                            <span>Comercio de pruebas de Semega</span>
-                                        </div>
-                                        <div className="mb-3 flex justify-between border-b-2 border-gray-300 pb-2">
-                                            <span><strong>Fecha:</strong></span> 
-                                            <span>{paymentDetails.created_at}</span>
-                                        </div>
-                                        <div className="flex justify-between">
-                                            <span><strong>Concepto:</strong></span> 
-                                            <span>{paymentDetails.concept}</span>
-                                        </div>
-                                    </div>
-                                </div>
+                                
+                                <PaymentSummaryCard paymentDetails={paymentDetails} />
 
                                 {/* Card de realizar el pago */}
                                 <div className="w-full md:w-1/2">
@@ -368,30 +312,17 @@ export default function PaymentPage() {
                                     <div className="bg-white p-6 rounded-lg shadow-lg text-center">
                                         <div className="flex justify-center items-center mb-4">
                                             <FiClock className="text-2xl m-1" />
-                                            <span className="timer">{new Date(timer * 1000).toISOString().substr(14, 5)}</span> {/* Formato mm:ss */}
+                                            <TimerDisplay timer={timer} />
                                         </div>
 
-                                        <div className="my-4 text-center">
-                                            <button onClick={() => handleActiveButton('smartQR')} 
-                                                    className={`py-2 px-4 rounded-3xl focus:outline-none ${activeButton === 'smartQR' ? 'bg-blue-500 text-white' : ''}`}>
-                                                Smart QR
-                                            </button>
-                                            <button onClick={() => handleActiveButton('web3')} 
-                                                    className={`ml-2 py-2 px-4 rounded-3xl focus:outline-none ${activeButton === 'web3' ? 'bg-blue-500 text-white' : ''}`}>
-                                                Web3
-                                            </button>
-                                        </div>
+                                        <PaymentOptions activeButton={activeButton} handleActiveButton={handleActiveButton} />
+                                        
                                         <div className="my-4 flex justify-center">
                                             {activeButton === 'smartQR' ? (
-                                                // <Image src={paymentDetails.qrCodeUrl ?? ''} alt="Código QR de Pago" width={256} height={256} />
                                                 <div className="px-6 py-4 bg-white rounded-md shadow-lg inline-block">
-                                                  {/* ... otros componentes de tu página ... */}
                                                     {paymentDetails.qrCodeUrl && (
-                                                        <div className="text-center my-4">
-                                                            <QRCodeSVG value={paymentDetails.qrCodeUrl} size={200} />
-                                                        </div>
+                                                        <QRCodeDisplay qrCodeUrl={paymentDetails.qrCodeUrl} />
                                                     )}
-                                                  {/* ... más de tu JSX ... */}
                                                 </div>
                                             ) : (
                                                 <Image src="/images/metamask.jpg" alt="Metamask" width={250} height={250} />
@@ -419,7 +350,7 @@ export default function PaymentPage() {
                                                 </button>
                                             </div>
                                         </div>
-                                        {/* Añadir más elementos del diseño según sea necesario */}
+                                        
                                     </div>
                                 </div>
                                             
